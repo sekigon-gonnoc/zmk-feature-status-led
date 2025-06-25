@@ -39,7 +39,7 @@ static bool led_state = false;
 static bool is_advertising = false;
 static bool is_connected = false;
 static bool is_showing_battery_level = false; // Flag to track battery level display
-static bool suspended = false;  // Track suspended state
+static bool suspended = false;                // Track suspended state
 
 // Counter variable to track blink state
 static uint8_t blink_count = 0;
@@ -80,7 +80,7 @@ static void start_advertising_indicator(void) {
     if (is_showing_battery_level) {
         return;
     }
-    
+
     is_advertising = true;
     blink_count = 0; // Reset counter
     k_work_schedule(&status_led_timer, K_NO_WAIT);
@@ -88,16 +88,16 @@ static void start_advertising_indicator(void) {
 
 static void blink_n_times(uint8_t n) {
     is_showing_battery_level = true;
-    
+
     for (int i = 0; i < n; i++) {
         status_led_on();
         k_sleep(K_MSEC(CONFIG_ZMK_STATUS_LED_BATTERY_BLINK_MS));
         status_led_off();
         k_sleep(K_MSEC(CONFIG_ZMK_STATUS_LED_BATTERY_PAUSE_MS));
     }
-    
+
     is_showing_battery_level = false;
-    
+
     // Start advertising indicator if needed after battery display is complete
     if (!is_connected && CONFIG_ZMK_STATUS_LED_ADVERTISING) {
         k_sleep(K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
@@ -105,27 +105,55 @@ static void blink_n_times(uint8_t n) {
     }
 }
 
+static void stop_advertising_indicator(void) {
+    is_advertising = false;
+    k_work_cancel_delayable(&status_led_timer);
+    status_led_off();
+}
+
 static void status_led_work_handler(struct k_work *work) {
     // Don't run advertising blinks while showing battery level or when suspended
     if (is_showing_battery_level || suspended) {
         return;
     }
-    
+
     if (is_advertising && CONFIG_ZMK_STATUS_LED_ADVERTISING) {
+        // Check actual connection state and update is_connected if needed
+        bool actually_connected = false;
+#if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+        // For central or non-split keyboards, check profile connection
+        actually_connected = zmk_ble_active_profile_is_connected();
+#else
+        // For peripherals, check connection to central
+        actually_connected = zmk_split_bt_peripheral_is_connected();
+#endif
+
+        // If we detect connection but our state says we're not connected, update state and stop
+        // advertising
+        if (actually_connected && !is_connected) {
+            LOG_INF("Connection detected in work handler, stopping advertising indicator");
+            is_connected = true;
+            stop_advertising_indicator();
+            return;
+        }
+
         if (led_state) {
             // If LED is on, turn it off and set the timing for the next blink
             status_led_off();
-            
+
             // Increment counter
             blink_count++;
-            
+
             if (blink_count < MAX_BLINKS) {
-                // If we haven't reached the required number of blinks, schedule next blink with short interval
+                // If we haven't reached the required number of blinks, schedule next blink with
+                // short interval
                 k_work_schedule(&status_led_timer, K_MSEC(CONFIG_ZMK_STATUS_LED_PAUSE_MS));
             } else {
-                // If we've blinked the required number of times, reset counter and set a longer interval
+                // If we've blinked the required number of times, reset counter and set a longer
+                // interval
                 blink_count = 0;
-                k_work_schedule(&status_led_timer, K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
+                k_work_schedule(&status_led_timer,
+                                K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
             }
         } else {
             // If LED is off, turn it on
@@ -143,7 +171,7 @@ static void show_battery_level(void) {
 #if CONFIG_ZMK_STATUS_LED_BATTERY_LEVEL
     int batt_lvl = zmk_battery_state_of_charge();
     uint8_t blinks = 1;
-    
+
     if (batt_lvl > 70) {
         blinks = 3;
     } else if (batt_lvl > 30) {
@@ -151,7 +179,7 @@ static void show_battery_level(void) {
     } else {
         blinks = 1;
     }
-    
+
     blink_n_times(blinks);
 #endif
 }
@@ -162,17 +190,11 @@ static void show_connected(void) {
     if (is_showing_battery_level) {
         return;
     }
-    
+
     status_led_on();
     k_sleep(K_MSEC(CONFIG_ZMK_STATUS_LED_CONNECTED_MS));
     status_led_off();
 #endif
-}
-
-static void stop_advertising_indicator(void) {
-    is_advertising = false;
-    k_work_cancel_delayable(&status_led_timer);
-    status_led_off();
 }
 
 static void bt_connected(struct bt_conn *conn, uint8_t err) {
@@ -201,17 +223,17 @@ static struct k_work_delayable status_led_init_work;
 // Function to handle the actual initialization tasks
 static void status_led_init_work_handler(struct k_work *work) {
     LOG_INF("Executing delayed status LED initialization");
-    
+
     k_work_init_delayable(&status_led_timer, status_led_work_handler);
-    
+
     bt_conn_cb_register(&conn_callbacks);
-    
+
     // Wait a bit for battery reading to stabilize
     k_sleep(K_MSEC(500));
-    
+
     // Show battery level at startup
     show_battery_level();
-    
+
     // Check connectivity based on keyboard role
 #if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     // For central or non-split keyboards, check profile connection
@@ -235,7 +257,7 @@ static void status_led_init_work_handler(struct k_work *work) {
 // Handle activity state change events
 static int activity_state_changed_listener(const zmk_event_t *eh) {
     const struct zmk_activity_state_changed *event = as_zmk_activity_state_changed(eh);
-    
+
     switch (event->state) {
     case ZMK_ACTIVITY_SLEEP:
         LOG_INF("Status LED system entering sleep mode");
@@ -270,16 +292,15 @@ static int status_led_init(void) {
         LOG_ERR("LED GPIO device not ready");
         return -ENODEV;
     }
-    
+
     int ret = gpio_pin_configure_dt(&led_gpio, GPIO_OUTPUT_INACTIVE);
     if (ret != 0) {
         LOG_ERR("Failed to configure GPIO pin: %d", ret);
         return ret;
     }
 
-    LOG_INF("GPIO LED configured successfully: port %s, pin %d", 
-            led_gpio.port->name, led_gpio.pin);
-    
+    LOG_INF("GPIO LED configured successfully: port %s, pin %d", led_gpio.port->name, led_gpio.pin);
+
     // Initialize and schedule the delayed work
     k_work_init_delayable(&status_led_init_work, status_led_init_work_handler);
     k_work_schedule(&status_led_init_work, K_MSEC(1)); // Delay for 1 ms
