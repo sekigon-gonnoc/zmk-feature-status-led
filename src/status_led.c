@@ -40,6 +40,9 @@ static bool is_advertising = false;
 static bool is_connected = false;
 static bool is_showing_battery_level = false; // Flag to track battery level display
 static bool suspended = false;                // Track suspended state
+#if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+static bool status_led_initialized = false;
+#endif
 
 // Counter variable to track blink state
 static uint8_t blink_count = 0;
@@ -217,6 +220,26 @@ static struct bt_conn_cb conn_callbacks = {
     .disconnected = bt_disconnected,
 };
 
+#if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+static int active_profile_changed_listener(const zmk_event_t *eh) {
+    if (as_zmk_ble_active_profile_changed(eh) == NULL || !status_led_initialized) {
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+
+    is_connected = zmk_ble_active_profile_is_connected();
+    if (is_connected) {
+        stop_advertising_indicator();
+    } else {
+        start_advertising_indicator();
+    }
+
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(status_led_active_profile, active_profile_changed_listener);
+ZMK_SUBSCRIPTION(status_led_active_profile, zmk_ble_active_profile_changed);
+#endif
+
 // Delayed initialization work
 static struct k_work_delayable status_led_init_work;
 
@@ -225,6 +248,9 @@ static void status_led_init_work_handler(struct k_work *work) {
     LOG_INF("Executing delayed status LED initialization");
 
     k_work_init_delayable(&status_led_timer, status_led_work_handler);
+#if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+    status_led_initialized = true;
+#endif
 
     bt_conn_cb_register(&conn_callbacks);
 
