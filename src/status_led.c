@@ -4,31 +4,34 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/led.h>
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zmk/battery.h>
+#include <zmk/events/activity_state_changed.h>
+
+#if defined(CONFIG_BT)
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
-#include <zephyr/init.h>
-#include <zmk/battery.h>
 #include <zmk/ble.h>
 #include <zmk/events/ble_active_profile_changed.h>
-#include <zmk/events/activity_state_changed.h>
-#include <zephyr/drivers/gpio.h>
-
 #if defined(CONFIG_ZMK_SPLIT) && !defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 #include <zmk/split/bluetooth/peripheral.h>
 #endif
-
-#include <zephyr/logging/log.h>
+#endif
 LOG_MODULE_REGISTER(zmk_status_led, CONFIG_ZMK_LOG_LEVEL);
 
 #define DT_DRV_COMPAT zmk_status_led
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
-// Timer work
+// Timer work is only needed for Bluetooth advertising indications.
+#if defined(CONFIG_BT)
 static struct k_work_delayable status_led_timer;
+#endif
 
 // LED GPIO
 #define LED_NODE DT_PHANDLE(DT_INST(0, zmk_status_led), led)
@@ -36,10 +39,11 @@ static const struct gpio_dt_spec led_gpio = GPIO_DT_SPEC_GET(LED_NODE, gpios);
 static bool led_state = false;
 
 // Current state tracking
-static bool is_advertising = false;
-static bool is_connected = false;
 static bool is_showing_battery_level = false; // Flag to track battery level display
 static bool suspended = false;                // Track suspended state
+#if defined(CONFIG_BT)
+static bool is_advertising = false;
+static bool is_connected = false;
 #if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static bool status_led_initialized = false;
 #endif
@@ -47,6 +51,7 @@ static bool status_led_initialized = false;
 // Counter variable to track blink state
 static uint8_t blink_count = 0;
 static const uint8_t MAX_BLINKS = 2; // 2 blinks
+#endif
 
 static int status_led_on(void) {
     int ret = -ENODEV;
@@ -78,6 +83,7 @@ static int status_led_off(void) {
     return ret;
 }
 
+#if defined(CONFIG_BT)
 static void start_advertising_indicator(void) {
     // Don't start advertising indicator while showing battery level
     if (is_showing_battery_level) {
@@ -88,6 +94,7 @@ static void start_advertising_indicator(void) {
     blink_count = 0; // Reset counter
     k_work_schedule(&status_led_timer, K_NO_WAIT);
 }
+#endif // CONFIG_BT
 
 static void blink_n_times(uint8_t n) {
     is_showing_battery_level = true;
@@ -101,13 +108,16 @@ static void blink_n_times(uint8_t n) {
 
     is_showing_battery_level = false;
 
+#if defined(CONFIG_BT)
     // Start advertising indicator if needed after battery display is complete
     if (!is_connected && CONFIG_ZMK_STATUS_LED_ADVERTISING) {
         k_sleep(K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
         start_advertising_indicator();
     }
+#endif
 }
 
+#if defined(CONFIG_BT)
 static void stop_advertising_indicator(void) {
     is_advertising = false;
     k_work_cancel_delayable(&status_led_timer);
@@ -140,10 +150,11 @@ static void status_led_work_handler(struct k_work *work) {
         actually_connected = zmk_split_bt_peripheral_is_connected();
 #endif
 
-        // If we detect connection but our state says we're not connected, update state and stop
-        // advertising
+        // If we detect connection but our state says we're not connected, update
+        // state and stop advertising
         if (actually_connected && !is_connected) {
-            LOG_INF("Connection detected in work handler, stopping advertising indicator");
+            LOG_INF("Connection detected in work handler, stopping advertising "
+                    "indicator");
             is_connected = true;
             stop_advertising_indicator();
             return;
@@ -157,12 +168,12 @@ static void status_led_work_handler(struct k_work *work) {
             blink_count++;
 
             if (blink_count < MAX_BLINKS) {
-                // If we haven't reached the required number of blinks, schedule next blink with
-                // short interval
+                // If we haven't reached the required number of blinks, schedule next
+                // blink with short interval
                 k_work_schedule(&status_led_timer, K_MSEC(CONFIG_ZMK_STATUS_LED_PAUSE_MS));
             } else {
-                // If we've blinked the required number of times, reset counter and set a longer
-                // interval
+                // If we've blinked the required number of times, reset counter and set
+                // a longer interval
                 blink_count = 0;
                 k_work_schedule(&status_led_timer,
                                 K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
@@ -178,6 +189,7 @@ static void status_led_work_handler(struct k_work *work) {
         blink_count = 0; // Reset counter when not in advertising mode
     }
 }
+#endif // CONFIG_BT
 
 static void show_battery_level(void) {
 #if CONFIG_ZMK_STATUS_LED_BATTERY_LEVEL
@@ -196,6 +208,7 @@ static void show_battery_level(void) {
 #endif
 }
 
+#if defined(CONFIG_BT)
 static void show_connected(void) {
 #if CONFIG_ZMK_STATUS_LED_CONNECTED
     // Don't interrupt battery level display
@@ -248,6 +261,7 @@ static int active_profile_changed_listener(const zmk_event_t *eh) {
 ZMK_LISTENER(status_led_active_profile, active_profile_changed_listener);
 ZMK_SUBSCRIPTION(status_led_active_profile, zmk_ble_active_profile_changed);
 #endif
+#endif // CONFIG_BT
 
 // Delayed initialization work
 static struct k_work_delayable status_led_init_work;
@@ -256,12 +270,14 @@ static struct k_work_delayable status_led_init_work;
 static void status_led_init_work_handler(struct k_work *work) {
     LOG_INF("Executing delayed status LED initialization");
 
+#if defined(CONFIG_BT)
     k_work_init_delayable(&status_led_timer, status_led_work_handler);
 #if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     status_led_initialized = true;
 #endif
 
     bt_conn_cb_register(&conn_callbacks);
+#endif
 
     // Wait a bit for battery reading to stabilize
     k_sleep(K_MSEC(500));
@@ -269,6 +285,7 @@ static void status_led_init_work_handler(struct k_work *work) {
     // Show battery level at startup
     show_battery_level();
 
+#if defined(CONFIG_BT)
     // Check connectivity based on keyboard role
 #if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     // For central or non-split keyboards, check profile connection
@@ -285,6 +302,7 @@ static void status_led_init_work_handler(struct k_work *work) {
         start_advertising_indicator();
     }
 #endif
+#endif // CONFIG_BT
 
     LOG_INF("Status LED initialization completed");
 }
@@ -340,7 +358,8 @@ static int status_led_init(void) {
     k_work_init_delayable(&status_led_init_work, status_led_init_work_handler);
     k_work_schedule(&status_led_init_work, K_MSEC(1)); // Delay for 1 ms
 
-    LOG_INF("Status LED basic initialization complete, full initialization scheduled");
+    LOG_INF("Status LED basic initialization complete, full initialization "
+            "scheduled");
     return 0;
 }
 

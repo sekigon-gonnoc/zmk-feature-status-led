@@ -16,12 +16,14 @@ config ZMK_STATUS_LED_BATTERY_LEVEL
 
 config ZMK_STATUS_LED_ADVERTISING
     bool "Blink LED during Bluetooth advertising"
+    depends on BT
     default y
     help
       Blink the LED when the keyboard is advertising.
 
 config ZMK_STATUS_LED_CONNECTED
     bool "Flash LED on Bluetooth connection"
+    depends on BT
     default y
     help
       Flash the LED briefly when a Bluetooth connection is established.
