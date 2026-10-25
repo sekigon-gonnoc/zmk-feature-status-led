@@ -121,6 +121,15 @@ static void status_led_work_handler(struct k_work *work) {
     }
 
     if (is_advertising && CONFIG_ZMK_STATUS_LED_ADVERTISING) {
+        /* A missing BLE connection does not imply advertising while the
+         * Bluetooth stack is disabled. Keep polling so the indicator resumes
+         * when Bluetooth is enabled again. */
+        if (!bt_is_ready()) {
+            status_led_off();
+            k_work_schedule(&status_led_timer,
+                            K_MSEC(CONFIG_ZMK_STATUS_LED_ADVERTISING_INTERVAL_MS));
+            return;
+        }
         // Check actual connection state and update is_connected if needed
         bool actually_connected = false;
 #if !defined(CONFIG_ZMK_SPLIT) || defined(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
