@@ -192,7 +192,7 @@ static void status_led_work_handler(struct k_work *work) {
 #endif // CONFIG_BT
 
 static void show_battery_level(void) {
-#if CONFIG_ZMK_STATUS_LED_BATTERY_LEVEL
+#if defined(CONFIG_ZMK_STATUS_LED_BATTERY_LEVEL) && defined(CONFIG_ZMK_BATTERY_REPORTING)
     int batt_lvl = zmk_battery_state_of_charge();
     uint8_t blinks = 1;
 
