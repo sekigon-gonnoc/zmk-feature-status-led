@@ -11,6 +11,7 @@ if ZMK_STATUS_LED
 config ZMK_STATUS_LED_BATTERY_LEVEL
     bool "Show battery level at startup"
     default y
+    depends on ZMK_BATTERY_REPORTING
     help
       Show battery level with 1-3 blinks at keyboard startup.
 
